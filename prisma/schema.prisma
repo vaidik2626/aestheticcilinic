@@ -1,0 +1,159 @@
+// Centro Estético Claudia Hernández — esquema de datos
+// La protección contra reservas superpuestas se refuerza con una restricción
+// EXCLUDE de PostgreSQL añadida manualmente en la migración inicial.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TreatmentCategory {
+  FACIAL
+  CORPORAL
+  POSTOPERATORIO
+  ASESORAMIENTO
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model Treatment {
+  id              String            @id @default(cuid())
+  category        TreatmentCategory
+  name            String
+  slug            String            @unique
+  description     String            @default("")
+  durationMinutes Int               @default(60)
+  active          Boolean           @default(true)
+  sortOrder       Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  bookings        Booking[]
+
+  @@index([category, active])
+}
+
+model Booking {
+  id             String        @id @default(cuid())
+  reference      String        @unique
+  idempotencyKey String        @unique
+  status         BookingStatus @default(PENDING)
+  treatmentId    String
+  treatment      Treatment     @relation(fields: [treatmentId], references: [id], onDelete: Restrict)
+  // Copia del nombre del tratamiento al momento de reservar (histórico).
+  treatmentName  String
+  startsAt       DateTime      @db.Timestamptz(3)
+  endsAt         DateTime      @db.Timestamptz(3)
+  // Fin de la cita + tiempo de margen. Rango [startsAt, blockedUntil) protegido por EXCLUDE.
+  blockedUntil   DateTime      @db.Timestamptz(3)
+  fullName       String
+  email          String
+  whatsapp       String
+  message        String?
+  consentAt      DateTime      @db.Timestamptz(3)
+  adminNotes     String?
+  emailSentAt    DateTime?     @db.Timestamptz(3)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([startsAt])
+  @@index([status, startsAt])
+}
+
+// Horario semanal. weekday: 0 = domingo … 6 = sábado. Horas "HH:MM" en hora de Bogotá.
+model AvailabilityRule {
+  id        String  @id @default(cuid())
+  weekday   Int
+  startTime String
+  endTime   String
+  active    Boolean @default(true)
+
+  @@index([weekday])
+}
+
+// Fechas o franjas bloqueadas (vacaciones, festivos, compromisos).
+model TimeOff {
+  id        String   @id @default(cuid())
+  startsAt  DateTime @db.Timestamptz(3)
+  endsAt    DateTime @db.Timestamptz(3)
+  allDay    Boolean  @default(false)
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([startsAt, endsAt])
+}
+
+// Configuración única (fila con id = "default").
+model BookingSettings {
+  id                  String  @id @default("default")
+  onlineBookingActive Boolean @default(false)
+  slotIntervalMinutes Int     @default(30)
+  bufferMinutes       Int     @default(15)
+  minNoticeHours      Int     @default(12)
+  maxAdvanceDays      Int     @default(60)
+}
+
+// Contenido editable del sitio (fila con id = "default"). `content` se valida con Zod.
+model SiteContent {
+  id        String   @id @default("default")
+  content   Json
+  updatedAt DateTime @updatedAt
+}
+
+model GalleryImage {
+  id        String   @id @default(cuid())
+  src       String
+  alt       String
+  label     String   @default("")
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Testimonial {
+  id                String             @id @default(cuid())
+  // Solo el nombre de pila y únicamente con autorización de la clienta.
+  firstName         String
+  text              String
+  category          TreatmentCategory?
+  consentConfirmed  Boolean            @default(false)
+  published         Boolean            @default(false)
+  sortOrder         Int                @default(0)
+  createdAt         DateTime           @default(now())
+}
+
+model AdminUser {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  name         String         @default("Administración")
+  passwordHash String
+  createdAt    DateTime       @default(now())
+  sessions     AdminSession[]
+}
+
+model AdminSession {
+  id        String    @id @default(cuid())
+  // SHA-256 del token de sesión; el token en claro solo vive en la cookie httpOnly.
+  tokenHash String    @unique
+  userId    String
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime  @db.Timestamptz(3)
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Limitación de solicitudes por ventana fija, compartida entre instancias serverless.
+model RateLimit {
+  key         String   @id
+  count       Int
+  windowStart DateTime @db.Timestamptz(3)
+}
